@@ -147,7 +147,6 @@ final class StatusTableViewController: UITableViewController, UIGestureRecognize
             charts.startDate = Calendar.current.nextDate(after: date, matching: components, matchingPolicy: .strict, direction: .backward) ?? date
 
             let reloadGroup = DispatchGroup()
-            let oldRecommendedTempBasal = self.recommendedTempBasal
             var newRecommendedTempBasal: LoopDataManager.TempBasalRecommendation?
 
             if let glucoseStore = dataManager.glucoseStore {
@@ -252,12 +251,12 @@ final class StatusTableViewController: UITableViewController, UIGestureRecognize
                 if let capacity = dataManager.pumpState?.pumpModel?.reservoirCapacity {
                     reservoirVolumeHUD.reservoirLevel = min(1, max(0, Double(reservoir.unitVolume / Double(capacity))))
                 }
-
+                
                 reservoirVolumeHUD.setReservoirVolume(volume: reservoir.unitVolume, at: reservoir.startDate)
             }
 
-            if let status = dataManager.latestPumpStatusFromMySentry {
-                batteryLevelHUD.batteryLevel = Double(status.batteryRemainingPercent) / 100
+            if let level = dataManager.pumpBatteryChargeRemaining {
+                batteryLevelHUD.batteryLevel = level
             }
 
             loopCompletionHUD.dosingEnabled = dataManager.loopManager.dosingEnabled
@@ -268,12 +267,16 @@ final class StatusTableViewController: UITableViewController, UIGestureRecognize
 
             reloadGroup.notify(queue: DispatchQueue.main) {
                 if let glucose = self.dataManager.glucoseStore?.latestGlucose {
-                    self.glucoseHUD.set(glucose, for: self.charts.glucoseUnit, from: self.dataManager.sensorInfo)
+                    self.glucoseHUD.set(glucoseQuantity: glucose.quantity.doubleValue(for: self.charts.glucoseUnit),
+                                        at: glucose.startDate,
+                                        unitString: self.charts.glucoseUnit.unitString,
+                                        from: self.dataManager.sensorInfo)
                 }
 
                 self.charts.prerender()
 
                 // Show/hide the recommended temp basal row
+                let oldRecommendedTempBasal = self.recommendedTempBasal
                 self.recommendedTempBasal = newRecommendedTempBasal
                 switch (oldRecommendedTempBasal, newRecommendedTempBasal) {
                 case (let old?, let new?) where old != new:
@@ -384,39 +387,13 @@ final class StatusTableViewController: UITableViewController, UIGestureRecognize
     }()
 
     // MARK: - HUD Data
-
+    
     private var lastTempBasal: DoseEntry? {
         didSet {
-            guard let scheduledBasal = dataManager.basalRateSchedule?.between(start: Date(), end: Date()).first else {
-                return
-            }
-
-            let netBasalRate: Double
-            let netBasalPercent: Double
-            let basalStartDate: Date
-
-            if let lastTempBasal = lastTempBasal, lastTempBasal.endDate > Date(), let maxBasal = dataManager.maximumBasalRatePerHour {
-                netBasalRate = lastTempBasal.value - scheduledBasal.value
-                basalStartDate = lastTempBasal.startDate
-
-                if netBasalRate < 0 {
-                    netBasalPercent = netBasalRate / scheduledBasal.value
-                } else {
-                    netBasalPercent = netBasalRate / (maxBasal - scheduledBasal.value)
+            if let lastNetBasal = self.dataManager.loopManager.lastNetBasal {
+                DispatchQueue.main.async {
+                    self.basalRateHUD.setNetBasalRate(lastNetBasal.rate, percent: lastNetBasal.percent, at: lastNetBasal.startDate)
                 }
-            } else {
-                netBasalRate = 0
-                netBasalPercent = 0
-
-                if let lastTempBasal = lastTempBasal, lastTempBasal.endDate > scheduledBasal.startDate {
-                    basalStartDate = lastTempBasal.endDate
-                } else {
-                    basalStartDate = scheduledBasal.startDate
-                }
-            }
-
-            DispatchQueue.main.async {
-                self.basalRateHUD.setNetBasalRate(netBasalRate, percent: netBasalPercent, at: basalStartDate)
             }
         }
     }
